@@ -13,7 +13,7 @@ from datetime import datetime
 # Optional dependency check
 try:
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl.styles import Font, PatternFill, Alignment
     HAS_OPENPYXL = True
 except ImportError:
     HAS_OPENPYXL = False
@@ -22,12 +22,12 @@ except ImportError:
 #               CONFIGURATION
 # ==========================================
 
-# --- App Info (MUDE ISSO A CADA ATUALIZAÇÃO) ---
+# --- App Info ---
 APP_VERSION = "1.0.5"
-GITHUB_REPO = "dsroldao/poe-maptracker" 
+GITHUB_REPO = "dsroldao/PoE-MapTracker"
 
 # --- Logic Settings ---
-SAVE_DELAY = 10  # Segundos para esperar antes de salvar/finalizar mapa
+SAVE_DELAY = 10  # Seconds to wait before saving/finishing map
 
 # --- Visual Settings ---
 THEME = {
@@ -58,7 +58,6 @@ SAFE_ZONES = [
 ]
 
 # Mechanics Configuration
-# Format: "Trigger Phrase": {"name": "Mechanic Name", "color": "HexColor", "badge": "ShortCode"}
 MECHANICS_CONFIG = {
     # Delirium
     "The Strange Voice": {"name": "Delirium",      "color": "#A9A9A9", "badge": "D"},
@@ -100,8 +99,8 @@ MECHANICS_CONFIG = {
     # Nameless Seer
     "Nameless Seer":     {"name": "Nameless Seer", "color": "#C8A2C8", "badge": "NS"},
 
-    # Eagon (Memory Tear mechanic)
-    "Eagon Caeserius":   {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}, # Medium Purple
+    # Eagon (Memory Tear)
+    "Eagon Caeserius":   {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}, 
     "Eagon":             {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}
 }
 
@@ -190,7 +189,6 @@ class PoEOverlay:
         self.lbl_deaths = tk.Label(content, text="", bg=THEME["bg"], fg=THEME["death"], font=("Verdana", 9, "bold"))
         self.lbl_deaths.pack(side="left", padx=(0, 5))
 
-        # Container para os icones
         self.frm_mechanics = tk.Frame(content, bg=THEME["bg"])
         self.frm_mechanics.pack(side="left", padx=(0, 5))
 
@@ -240,7 +238,8 @@ class PoEOverlay:
 
     def _perform_update(self, url):
         try:
-            new_file_path = os.path.join(self.app_dir, "new_tracker.exe")
+            # Updated filename here to match new naming convention
+            new_file_path = os.path.join(self.app_dir, "new_PoE-MapTracker.exe")
             with urllib.request.urlopen(url) as response, open(new_file_path, 'wb') as out_file:
                 shutil.copyfileobj(response, out_file)
             
@@ -322,13 +321,11 @@ class PoEOverlay:
         if " : You have been slain." in line and self.status == "running":
             self.deaths += 1
 
-        # 3. Mechanics (Lógica Melhorada)
+        # 3. Mechanics
         if self.status == "running":
-            # Ignora linhas de chat de jogadores (@, #, $, %)
             if any(char in line for char in ["@", "#", "$", "%", "&"]):
                 return
 
-            # Procura por qualquer gatilho na linha inteira
             for trigger, data in MECHANICS_CONFIG.items():
                 if trigger in line:
                     self._add_mechanic(data)
@@ -471,7 +468,6 @@ class PoEOverlay:
             if self.status == "running":
                 self.elapsed = time.time() - self.start_time
             elif self.status == "cooldown":
-                # Use SAVE_DELAY instead of hardcoded 5
                 remain = SAVE_DELAY - (time.time() - self.cooldown_start)
                 if remain <= 0:
                     self._save_to_excel()
@@ -483,7 +479,6 @@ class PoEOverlay:
                     
     def _update_gui_loop(self):
         if self.status == "cooldown":
-            # Use SAVE_DELAY instead of hardcoded 5
             remain = int(SAVE_DELAY - (time.time() - self.cooldown_start))
             self.lbl_map.config(text=f"Saving: {remain}s", fg="orange")
         else:

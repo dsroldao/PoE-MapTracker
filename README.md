@@ -28,7 +28,7 @@ The application generates files in the **same directory where the executable is 
     ```
 3. Run the script:   
     ```
-    python tracker.py
+    python PoE-MapTracker.py
     
     
     ```
@@ -37,10 +37,10 @@ The application generates files in the **same directory where the executable is 
 To create a standalone executable for distribution:   
 ```
 pip install pyinstaller
-python -m PyInstaller --noconsole --onefile tracker.py
+python -m PyInstaller --noconsole --onefile PoE-MapTracker.py
 
 
 ```
 The executable will be in the `dist/` folder.   
 ## Configuration   
-The app automatically searches for the PoE `Client.txt` file. If not found, it will ask you to select it manually.   
+The app automatically searches for the PoE `Client.txt` file. If not found, it will ask you to select it manually.
