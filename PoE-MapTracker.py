@@ -22,7 +22,7 @@ except ImportError:
 #               CONFIGURATION
 # ==========================================
 
-# --- App Info (MUDE ISSO A CADA ATUALIZAÇÃO) ---
+# --- App Info ---
 APP_VERSION = "1.0.6"
 GITHUB_REPO = "dsroldao/PoE-MapTracker" 
 
