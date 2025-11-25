@@ -22,9 +22,9 @@ except ImportError:
 #               CONFIGURATION
 # ==========================================
 
-# --- App Info ---
-APP_VERSION = "1.0.5"
-GITHUB_REPO = "dsroldao/PoE-MapTracker"
+# --- App Info (MUDE ISSO A CADA ATUALIZAÇÃO) ---
+APP_VERSION = "1.0.6"
+GITHUB_REPO = "dsroldao/PoE-MapTracker" 
 
 # --- Logic Settings ---
 SAVE_DELAY = 10  # Seconds to wait before saving/finishing map
@@ -42,7 +42,7 @@ THEME = {
 
 FONTS = {
     "main": ("Verdana", 9),
-    "timer": ("Verdana", 14, "bold"),
+    "timer": ("Verdana", 10, "bold"), 
     "title": ("Verdana", 7, "bold"),
     "badge": ("Verdana", 7, "bold")
 }
@@ -99,9 +99,13 @@ MECHANICS_CONFIG = {
     # Nameless Seer
     "Nameless Seer":     {"name": "Nameless Seer", "color": "#C8A2C8", "badge": "NS"},
 
-    # Eagon (Memory Tear)
+    # Eagon (Memory Tear mechanic)
     "Eagon Caeserius":   {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}, 
-    "Eagon":             {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}
+    "Eagon":             {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"},
+
+    # Harvest (Oshabi)
+    "Oshabi":            {"name": "Harvest",       "color": "#7FFFD4", "badge": "H"},
+    "Oshabi, Avatar of the Grove": {"name": "Harvest", "color": "#7FFFD4", "badge": "H"} 
 }
 
 class PoEOverlay:
@@ -125,7 +129,8 @@ class PoEOverlay:
     def _init_window(self):
         title_text = f"PoE Map Tracker v{APP_VERSION}"
         self.root.title(title_text)
-        self.root.geometry("450x40+100+100")
+        # Largura inicial (Modo Padrão) - Reduzido para 350
+        self.root.geometry("350x40+100+100")
         self.root.overrideredirect(True) 
         self.root.wm_attributes("-topmost", True) 
         self.root.wm_attributes("-alpha", 0.95) 
@@ -142,6 +147,7 @@ class PoEOverlay:
         self.mechanics_found = []
         self.tier_var = tk.StringVar(value="16")
         self.running = True
+        self.is_compact = False # Variável para controlar o modo
 
         if getattr(sys, 'frozen', False):
             self.app_dir = os.path.dirname(sys.executable)
@@ -168,35 +174,85 @@ class PoEOverlay:
         self.lbl_title = tk.Label(self.title_bar, text=f" PoE Map Tracker v{APP_VERSION}", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"])
         self.lbl_title.pack(side="left", padx=2)
         
-        btn_close = tk.Label(self.title_bar, text=" x ", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"], cursor="hand2")
-        btn_close.pack(side="right", fill="y")
+        # Container para botões à direita
+        btn_container = tk.Frame(self.title_bar, bg=THEME["title_bg"])
+        btn_container.pack(side="right", fill="y")
+
+        # Botão Modo Compacto (M)
+        self.btn_mode = tk.Label(btn_container, text=" M ", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"], cursor="hand2")
+        self.btn_mode.pack(side="left", fill="y")
+        self.btn_mode.bind("<Button-1>", lambda e: self._toggle_compact_mode())
+        self.btn_mode.bind("<Enter>", lambda e: self.btn_mode.config(bg=THEME["accent"], fg=THEME["bg"]))
+        self.btn_mode.bind("<Leave>", lambda e: self.btn_mode.config(bg=THEME["title_bg"], fg="#b9bbbe"))
+
+        # Botão Fechar (X)
+        btn_close = tk.Label(btn_container, text=" X ", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"], cursor="hand2")
+        btn_close.pack(side="left", fill="y")
         btn_close.bind("<Button-1>", lambda e: sys.exit())
         btn_close.bind("<Enter>", lambda e: btn_close.config(bg=THEME["death"], fg=THEME["text"]))
         btn_close.bind("<Leave>", lambda e: btn_close.config(bg=THEME["title_bg"], fg="#b9bbbe"))
 
     def _setup_main_content(self):
-        content = tk.Frame(self.root, bg=THEME["bg"])
-        content.pack(fill="both", expand=True, padx=2)
+        self.content_frame = tk.Frame(self.root, bg=THEME["bg"])
+        self.content_frame.pack(fill="both", expand=True, padx=2)
 
-        self.lbl_map = tk.Label(content, text=self.current_map, bg=THEME["bg"], fg=THEME["text"], font=FONTS["main"])
-        self.lbl_map.pack(side="left", padx=(5, 5))
-
-        tk.Label(content, text="|", bg=THEME["bg"], fg="#40444b", font=FONTS["main"]).pack(side="left")
-
-        self.lbl_timer = tk.Label(content, text="00:00", bg=THEME["bg"], fg=THEME["timer_idle"], font=FONTS["timer"])
-        self.lbl_timer.pack(side="left", padx=(5, 5))
-
-        self.lbl_deaths = tk.Label(content, text="", bg=THEME["bg"], fg=THEME["death"], font=("Verdana", 9, "bold"))
-        self.lbl_deaths.pack(side="left", padx=(0, 5))
-
-        self.frm_mechanics = tk.Frame(content, bg=THEME["bg"])
-        self.frm_mechanics.pack(side="left", padx=(0, 5))
-
-        tier_frame = tk.Frame(content, bg=THEME["bg"])
-        tier_frame.pack(side="right", padx=2)
-        tk.Label(tier_frame, text="T", bg=THEME["bg"], fg="#b9bbbe", font=FONTS["main"]).pack(side="left")
-        self.entry_tier = tk.Entry(tier_frame, textvariable=self.tier_var, width=3, bg="#40444b", fg=THEME["text"], borderwidth=0, font=FONTS["main"], justify="center")
+        # Elementos (Criados uma vez, gerenciados por pack)
+        self.lbl_map = tk.Label(self.content_frame, text=self.current_map, bg=THEME["bg"], fg=THEME["text"], font=FONTS["main"])
+        self.lbl_sep = tk.Label(self.content_frame, text="|", bg=THEME["bg"], fg="#40444b", font=FONTS["main"])
+        
+        self.lbl_timer = tk.Label(self.content_frame, text="00:00", bg=THEME["bg"], fg=THEME["timer_idle"], font=FONTS["timer"])
+        
+        self.lbl_deaths = tk.Label(self.content_frame, text="", bg=THEME["bg"], fg=THEME["death"], font=("Verdana", 9, "bold"))
+        
+        self.frm_mechanics = tk.Frame(self.content_frame, bg=THEME["bg"])
+        
+        self.tier_frame = tk.Frame(self.content_frame, bg=THEME["bg"])
+        tk.Label(self.tier_frame, text="T", bg=THEME["bg"], fg="#b9bbbe", font=FONTS["main"]).pack(side="left")
+        self.entry_tier = tk.Entry(self.tier_frame, textvariable=self.tier_var, width=3, bg="#40444b", fg=THEME["text"], borderwidth=0, font=FONTS["main"], justify="center")
         self.entry_tier.pack(side="left", padx=(2, 0))
+
+        # Aplica o layout inicial (Padrão)
+        self._apply_layout_standard()
+
+    def _toggle_compact_mode(self):
+        self.is_compact = not self.is_compact
+        if self.is_compact:
+            self._apply_layout_compact()
+        else:
+            self._apply_layout_standard()
+
+    def _apply_layout_standard(self):
+        # Remove tudo para garantir ordem
+        self._unpack_all()
+        
+        # Restaura Geometria - Reduzido para 350
+        self.root.geometry("350x40")
+        
+        # Adiciona na ordem padrão
+        self.lbl_map.pack(side="left", padx=(5, 5))
+        self.lbl_sep.pack(side="left")
+        self.lbl_timer.pack(side="left", padx=(5, 5))
+        self.lbl_deaths.pack(side="left", padx=(0, 5))
+        self.frm_mechanics.pack(side="left", padx=(0, 5))
+        self.tier_frame.pack(side="right", padx=2)
+
+    def _apply_layout_compact(self):
+        # Remove tudo
+        self._unpack_all()
+        
+        # Geometria Compacta (Apenas Timer)
+        self.root.geometry("100x40")
+        
+        # Adiciona apenas o timer, centralizado
+        self.lbl_timer.pack(side="top", pady=2) # Use top/pady to center vertically in the small space
+
+    def _unpack_all(self):
+        self.lbl_map.pack_forget()
+        self.lbl_sep.pack_forget()
+        self.lbl_timer.pack_forget()
+        self.lbl_deaths.pack_forget()
+        self.frm_mechanics.pack_forget()
+        self.tier_frame.pack_forget()
 
     def _make_draggable(self, widget):
         def start_move(e):
@@ -238,7 +294,6 @@ class PoEOverlay:
 
     def _perform_update(self, url):
         try:
-            # Updated filename here to match new naming convention
             new_file_path = os.path.join(self.app_dir, "new_PoE-MapTracker.exe")
             with urllib.request.urlopen(url) as response, open(new_file_path, 'wb') as out_file:
                 shutil.copyfileobj(response, out_file)
@@ -310,18 +365,15 @@ class PoEOverlay:
             self.current_map = "Log Error"
 
     def _process_log_line(self, line):
-        # 1. Zone Change
         if " : You have entered " in line:
             try:
                 zone = line.split(" : You have entered ")[1].strip().replace(".", "")
                 self._handle_zone_change(zone)
             except: pass
         
-        # 2. Deaths
         if " : You have been slain." in line and self.status == "running":
             self.deaths += 1
 
-        # 3. Mechanics
         if self.status == "running":
             if any(char in line for char in ["@", "#", "$", "%", "&"]):
                 return
@@ -480,11 +532,15 @@ class PoEOverlay:
     def _update_gui_loop(self):
         if self.status == "cooldown":
             remain = int(SAVE_DELAY - (time.time() - self.cooldown_start))
-            self.lbl_map.config(text=f"Saving: {remain}s", fg="orange")
+            if self.is_compact:
+                self.lbl_map.config(text="") # No text in compact mode
+            else:
+                self.lbl_map.config(text=f"Saving: {remain}s", fg="orange")
         else:
-            name = self.current_map
-            if len(name) > 22: name = name[:20] + ".."
-            self.lbl_map.config(text=name, fg=THEME["text"])
+            if not self.is_compact:
+                name = self.current_map
+                if len(name) > 22: name = name[:20] + ".."
+                self.lbl_map.config(text=name, fg=THEME["text"])
         
         self.lbl_timer.config(text=self._format_time(self.elapsed))
         self.lbl_deaths.config(text=f"☠ {self.deaths}" if self.deaths > 0 else "")
