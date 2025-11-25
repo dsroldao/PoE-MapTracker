@@ -134,7 +134,7 @@ class PoEOverlay:
     def _init_window(self):
         title_text = f"PoE Map Tracker v{APP_VERSION}"
         self.root.title(title_text)
-        # Initial Width (Standard Mode) - Compacted to 350
+        # Initial Width (Standard Mode)
         self.root.geometry("350x40+100+100")
         self.root.overrideredirect(True) 
         self.root.wm_attributes("-topmost", True) 
@@ -176,6 +176,7 @@ class PoEOverlay:
         self._make_draggable(self.lbl_title)
 
     def _setup_title_bar_content(self):
+        # Store label in self to hide it later in compact mode
         self.lbl_title = tk.Label(self.title_bar, text=f" PoE Map Tracker v{APP_VERSION}", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"])
         self.lbl_title.pack(side="left", padx=2)
         
@@ -230,6 +231,9 @@ class PoEOverlay:
         # Remove all to ensure order
         self._unpack_all()
         
+        # Restore Title Text
+        self.lbl_title.pack(side="left", padx=2)
+
         # Restore Geometry - Compact Standard (350px)
         self.root.geometry("350x40")
         
@@ -245,6 +249,9 @@ class PoEOverlay:
         # Remove all
         self._unpack_all()
         
+        # HIDE Title Text to free up space for buttons
+        self.lbl_title.pack_forget()
+
         # Compact Geometry (Timer Only)
         self.root.geometry("100x40")
         
