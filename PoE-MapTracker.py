@@ -1,15 +1,22 @@
+import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import time
 import threading
 import os
 import sys
-import json
-import urllib.request
-import subprocess
-import shutil
+import subprocess 
+import ctypes 
 from datetime import datetime
-import ctypes
+
+# --- NEW DEPENDENCIES FOR TRAY ICON ---
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+    print("Tray icon libraries missing. Install: pip install pystray Pillow")
 
 # Optional dependency check
 try:
@@ -24,13 +31,15 @@ except ImportError:
 # ==========================================
 
 # --- App Info ---
-APP_VERSION = "1.0.7" 
-GITHUB_REPO = "dsroldao/PoE-MapTracker" 
+APP_VERSION = "1.0.7"
+# FIX: App ID for Taskbar Icon Grouping
+APP_ID = 'dsroldao.poemaptracker.v1.0.7' 
 
 # --- Logic Settings ---
-SAVE_DELAY = 10  # Seconds to wait before saving/finishing map
+SAVE_DELAY = 15  
+GAME_PROCESSES = ["PathOfExile.exe", "PathOfExile_x64.exe", "PathOfExileSteam.exe"]
 
-# --- Visual Settings ---
+# --- Visual Settings (Modern Theme) ---
 THEME = {
     "bg": "#2f3136",
     "title_bg": "#202225",
@@ -38,14 +47,17 @@ THEME = {
     "accent": "#d4af37",
     "timer_idle": "#b9bbbe",
     "death": "#ed4245",
-    "border": "#202225"
+    "border": "#202225",
+    "input_bg": "#40444b",
+    "hover_close": "#ed4245",
+    "hover_mode": "#d4af37"
 }
 
 FONTS = {
-    "main": ("Verdana", 9),
-    "timer": ("Verdana", 10, "bold"), 
-    "title": ("Verdana", 7, "bold"),
-    "badge": ("Verdana", 7, "bold")
+    "main": ("Segoe UI", 12),        
+    "timer": ("Segoe UI", 14, "bold"), 
+    "title": ("Segoe UI", 10, "bold"), 
+    "badge": ("Segoe UI", 10, "bold")  
 }
 
 # --- Game Logic Settings ---
@@ -83,33 +95,110 @@ MECHANICS_CONFIG = {
     "Oshabi, Avatar of the Grove": {"name": "Harvest", "color": "#7FFFD4", "badge": "H"} 
 }
 
-class PoEOverlay:
-    def __init__(self, root):
-        self.root = root
+class PoEOverlay(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        
+        # Apply App ID for Taskbar Icon
+        try: ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        except: pass
+
+        self._check_single_instance()
         self._check_dependencies()
-        self._init_window()
-        self._init_variables()
+        self._init_variables() 
+        self._create_start_menu_shortcut() 
+        self._init_window() 
         self._setup_ui()
         
-        self.root.after(500, self._init_log_search)
+        # Start Tray Icon
+        if HAS_TRAY:
+            threading.Thread(target=self._setup_tray_icon, daemon=True).start()
+
+        self.after(500, self._init_log_search)
+        self.after(2000, self._monitor_game_process) 
+        self.after(200, self._monitor_focus_loop) 
         
-        if getattr(sys, 'frozen', False):
-            self.root.after(3000, self._check_for_updates) # Wait 3s before checking
+        self.after(200, self._force_taskbar_icon)
+
+    # --- HELPER: Ultimate Resource Path Finder ---
+    def resource_path(self, relative_path):
+        """ 
+        Get absolute path to resource. 
+        Checks multiple locations to ensure it finds the file in Dev, PyInstaller, and Nuitka modes.
+        """
+        search_paths = []
+        
+        # 1. Nuitka / Standard Script Directory (The most reliable for Nuitka onefile)
+        try:
+            search_paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path))
+        except: pass
+
+        # 2. PyInstaller Temp Folder (_MEIPASS)
+        if hasattr(sys, '_MEIPASS'):
+            search_paths.append(os.path.join(sys._MEIPASS, relative_path))
+        
+        # 3. Executable Directory (Where the .exe sits)
+        try:
+            search_paths.append(os.path.join(os.path.dirname(sys.executable), relative_path))
+        except: pass
+
+        # 4. Current Working Directory
+        search_paths.append(os.path.join(os.getcwd(), relative_path))
+
+        # Check all potential paths
+        for path in search_paths:
+            if os.path.exists(path):
+                return path
+        
+        # If all fails, return relative and hope for the best
+        return relative_path
+
+    def _check_single_instance(self):
+        try:
+            self.mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "Global\\PoE_MapTracker_Instance")
+            last_error = ctypes.windll.kernel32.GetLastError()
+            if last_error == 183: 
+                messagebox.showwarning("Already Running", "PoE Map Tracker is already open.")
+                sys.exit()
+        except: pass 
 
     def _check_dependencies(self):
         if not HAS_OPENPYXL:
-            messagebox.showerror("Missing Dependency", "Please install openpyxl:\npip install openpyxl")
+            messagebox.showerror("Missing Dependency", "To generate Excel files, install openpyxl:\n\npip install openpyxl")
             sys.exit()
 
     def _init_window(self):
-        title_text = f"PoE Map Tracker v{APP_VERSION}"
-        self.root.title(title_text)
-        self.root.geometry("350x40+100+100")
-        self.root.overrideredirect(True) 
-        self.root.wm_attributes("-topmost", True) 
-        self.root.wm_attributes("-alpha", 0.95) 
-        self.root.configure(bg=THEME["bg"])
-        self.root.config(highlightbackground=THEME["border"], highlightcolor=THEME["border"], highlightthickness=1)
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("dark-blue")
+        
+        self.title(f"PoE Map Tracker v{APP_VERSION}")
+        self.geometry("340x50+100+100")
+        self.overrideredirect(True) 
+        self.attributes("-topmost", True) 
+        self.attributes("-alpha", 0.95)
+        self.configure(fg_color=THEME["bg"])
+        
+        # --- ICON LOADING (UPDATED) ---
+        icon_path = self.resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            try:
+                self.iconbitmap(bitmap=icon_path)
+                self.iconbitmap(default=icon_path)
+            except Exception as e:
+                print(f"Icon load error: {e}")
+
+        self.main_container = ctk.CTkFrame(self, fg_color=THEME["bg"], border_width=1, border_color=THEME["border"], corner_radius=0)
+        self.main_container.pack(fill="both", expand=True)
+
+    def _force_taskbar_icon(self):
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, -20) 
+            style = style | 0x00040000 
+            ctypes.windll.user32.SetWindowLongW(hwnd, -20, style)
+            self.withdraw()
+            self.after(10, self.deiconify)
+        except: pass
 
     def _init_variables(self):
         self.status = "idle" 
@@ -123,85 +212,148 @@ class PoEOverlay:
         self.running = True
         self.is_compact = False
         self.pending_runs = []
+        self.game_not_found_count = 0 
+        
+        self.is_paused = False
+        self.pause_timestamp = 0
 
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, 'frozen', False) or "__compiled__" in globals():
             self.app_dir = os.path.dirname(sys.executable)
         else:
             self.app_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.history_dir = os.path.join(self.app_dir, "Map History")
+        self._ensure_history_folder()
             
         self.config_file = os.path.join(self.app_dir, "config.txt")
-        self.excel_file = os.path.join(self.app_dir, "map_history.xlsx")
+        self.excel_file = os.path.join(self.history_dir, "map_history.xlsx")
+
+    def _ensure_history_folder(self):
+        if not os.path.exists(self.history_dir):
+            try: os.makedirs(self.history_dir)
+            except: pass
+
+    def _create_start_menu_shortcut(self):
+        if not getattr(sys, 'frozen', False): return 
+
+        try:
+            app_name = "PoE Map Tracker"
+            start_menu = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs")
+            shortcut_path = os.path.join(start_menu, f"{app_name}.lnk")
+            target_exe = sys.executable
+            icon_path = self.resource_path("icon.ico")
+            
+            if not os.path.exists(shortcut_path):
+                icon_cmd = f'$Shortcut.IconLocation = "{icon_path}"' if os.path.exists(icon_path) else ""
+                ps_script = f"""
+                $WshShell = New-Object -comObject WScript.Shell
+                $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
+                $Shortcut.TargetPath = "{target_exe}"
+                $Shortcut.WorkingDirectory = "{self.app_dir}"
+                $Shortcut.Description = "Automated Map Tracker for Path of Exile"
+                {icon_cmd}
+                $Shortcut.Save()
+                """
+                subprocess.run(["powershell", "-Command", ps_script], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        except: pass
+
+    # ==========================================
+    #               SYSTEM TRAY
+    # ==========================================
+    def _setup_tray_icon(self):
+        if not HAS_TRAY: return
+        
+        icon_path = self.resource_path("icon.ico")
+        
+        if os.path.exists(icon_path):
+            image = Image.open(icon_path)
+        else:
+            # Fallback if icon is REALLY missing
+            image = Image.new('RGB', (64, 64), color=(212, 175, 55))
+            d = ImageDraw.Draw(image)
+            d.rectangle([16,16,48,48], fill=(47, 49, 54))
+
+        def on_quit(icon, item):
+            icon.stop()
+            self.quit()
+
+        def on_show(icon, item):
+            self.after(0, self.deiconify)
+            self.after(0, lambda: self.attributes("-topmost", True))
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Show Tracker", on_show, default=True),
+            pystray.MenuItem("Exit", on_quit)
+        )
+        self.tray_icon = pystray.Icon("PoE Map Tracker", image, "PoE Map Tracker", menu)
+        self.tray_icon.run()
 
     # ==========================================
     #                  UI SETUP
     # ==========================================
     def _setup_ui(self):
-        self.title_bar = tk.Frame(self.root, bg=THEME["title_bg"], height=16)
+        self.title_bar = ctk.CTkFrame(self.main_container, height=16, fg_color=THEME["title_bg"], corner_radius=0)
         self.title_bar.pack(fill="x", side="top")
-        self.title_bar.pack_propagate(False)
-        self._setup_title_bar_content()
-        self._setup_main_content()
+        
+        self.lbl_title = ctk.CTkLabel(self.title_bar, text=f" PoE Map Tracker v{APP_VERSION}", 
+                                      font=FONTS["title"], text_color=THEME["timer_idle"])
+        self.lbl_title.pack(side="left", padx=5)
+
+        controls = ctk.CTkFrame(self.title_bar, fg_color="transparent")
+        controls.pack(side="right", fill="y")
+
+        self.btn_mode = ctk.CTkButton(controls, text="M", width=20, height=16, 
+                                      fg_color="transparent", hover_color=THEME["hover_mode"],
+                                      text_color=THEME["timer_idle"], font=FONTS["title"],
+                                      command=self._toggle_compact_mode)
+        self.btn_mode.pack(side="left")
+
+        btn_close = ctk.CTkButton(controls, text="X", width=20, height=16,
+                                  fg_color="transparent", hover_color=THEME["hover_close"],
+                                  text_color=THEME["timer_idle"], font=FONTS["title"],
+                                  command=self.quit) 
+        btn_close.pack(side="left")
+
+        self.content = ctk.CTkFrame(self.main_container, fg_color="transparent", corner_radius=0)
+        self.content.pack(fill="both", expand=True, padx=5)
+
+        self.lbl_map = ctk.CTkLabel(self.content, text=self.current_map, font=FONTS["main"], text_color=THEME["text"])
+        self.lbl_sep = ctk.CTkLabel(self.content, text="|", font=FONTS["main"], text_color="#40444b")
+        self.lbl_timer = ctk.CTkLabel(self.content, text="00:00", font=FONTS["timer"], text_color=THEME["timer_idle"])
+        self.lbl_deaths = ctk.CTkLabel(self.content, text="", font=FONTS["main"], text_color=THEME["death"])
+        self.frm_mechanics = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.frm_tier = ctk.CTkFrame(self.content, fg_color="transparent")
+        ctk.CTkLabel(self.frm_tier, text="T", font=FONTS["main"], text_color=THEME["timer_idle"]).pack(side="left", padx=(0,2))
+        self.entry_tier = ctk.CTkEntry(self.frm_tier, textvariable=self.tier_var, width=30, height=20, 
+                                       fg_color=THEME["input_bg"], border_width=0, 
+                                       font=FONTS["main"], justify="center")
+        self.entry_tier.pack(side="left")
+
         self._make_draggable(self.title_bar)
         self._make_draggable(self.lbl_title)
-
-    def _setup_title_bar_content(self):
-        self.lbl_title = tk.Label(self.title_bar, text=f" PoE Map Tracker v{APP_VERSION}", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"])
-        self.lbl_title.pack(side="left", padx=2)
-        
-        btn_container = tk.Frame(self.title_bar, bg=THEME["title_bg"])
-        btn_container.pack(side="right", fill="y")
-
-        self.btn_mode = tk.Label(btn_container, text=" M ", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"], cursor="hand2")
-        self.btn_mode.pack(side="left", fill="y")
-        self.btn_mode.bind("<Button-1>", lambda e: self._toggle_compact_mode())
-        self.btn_mode.bind("<Enter>", lambda e: self.btn_mode.config(bg=THEME["accent"], fg=THEME["bg"]))
-        self.btn_mode.bind("<Leave>", lambda e: self.btn_mode.config(bg=THEME["title_bg"], fg="#b9bbbe"))
-
-        btn_close = tk.Label(btn_container, text=" X ", bg=THEME["title_bg"], fg="#b9bbbe", font=FONTS["title"], cursor="hand2")
-        btn_close.pack(side="left", fill="y")
-        btn_close.bind("<Button-1>", lambda e: sys.exit())
-        btn_close.bind("<Enter>", lambda e: btn_close.config(bg=THEME["death"], fg=THEME["text"]))
-        btn_close.bind("<Leave>", lambda e: btn_close.config(bg=THEME["title_bg"], fg="#b9bbbe"))
-
-    def _setup_main_content(self):
-        self.content_frame = tk.Frame(self.root, bg=THEME["bg"])
-        self.content_frame.pack(fill="both", expand=True, padx=2)
-
-        self.lbl_map = tk.Label(self.content_frame, text=self.current_map, bg=THEME["bg"], fg=THEME["text"], font=FONTS["main"])
-        self.lbl_sep = tk.Label(self.content_frame, text="|", bg=THEME["bg"], fg="#40444b", font=FONTS["main"])
-        self.lbl_timer = tk.Label(self.content_frame, text="00:00", bg=THEME["bg"], fg=THEME["timer_idle"], font=FONTS["timer"])
-        self.lbl_deaths = tk.Label(self.content_frame, text="", bg=THEME["bg"], fg=THEME["death"], font=("Verdana", 9, "bold"))
-        self.frm_mechanics = tk.Frame(self.content_frame, bg=THEME["bg"])
-        self.tier_frame = tk.Frame(self.content_frame, bg=THEME["bg"])
-        tk.Label(self.tier_frame, text="T", bg=THEME["bg"], fg="#b9bbbe", font=FONTS["main"]).pack(side="left")
-        self.entry_tier = tk.Entry(self.tier_frame, textvariable=self.tier_var, width=3, bg="#40444b", fg=THEME["text"], borderwidth=0, font=FONTS["main"], justify="center")
-        self.entry_tier.pack(side="left", padx=(2, 0))
-
         self._apply_layout_standard()
 
     def _toggle_compact_mode(self):
         self.is_compact = not self.is_compact
-        if self.is_compact:
-            self._apply_layout_compact()
-        else:
-            self._apply_layout_standard()
+        if self.is_compact: self._apply_layout_compact()
+        else: self._apply_layout_standard()
 
     def _apply_layout_standard(self):
         self._unpack_all()
-        self.lbl_title.pack(side="left", padx=2)
-        self.root.geometry("350x40")
-        self.lbl_map.pack(side="left", padx=(5, 5))
-        self.lbl_sep.pack(side="left")
-        self.lbl_timer.pack(side="left", padx=(5, 5))
+        self.lbl_title.pack(side="left", padx=5)
+        self.geometry("340x50")
+        self.frm_tier.pack(side="right", padx=2)
+        self.lbl_map.pack(side="left", padx=(0, 5))
+        self.lbl_sep.pack(side="left", padx=(0, 5))
+        self.lbl_timer.pack(side="left", padx=(0, 5))
         self.lbl_deaths.pack(side="left", padx=(0, 5))
         self.frm_mechanics.pack(side="left", padx=(0, 5))
-        self.tier_frame.pack(side="right", padx=2)
 
     def _apply_layout_compact(self):
         self._unpack_all()
         self.lbl_title.pack_forget()
-        self.root.geometry("100x40")
-        self.lbl_timer.pack(side="top", pady=2) 
+        self.geometry("100x50")
+        self.lbl_timer.pack(side="top", pady=0)
 
     def _unpack_all(self):
         self.lbl_map.pack_forget()
@@ -209,95 +361,92 @@ class PoEOverlay:
         self.lbl_timer.pack_forget()
         self.lbl_deaths.pack_forget()
         self.frm_mechanics.pack_forget()
-        self.tier_frame.pack_forget()
+        self.frm_tier.pack_forget()
 
     def _make_draggable(self, widget):
         def start_move(e):
-            e.widget.winfo_toplevel().x = e.x
-            e.widget.winfo_toplevel().y = e.y
+            self.x = e.x
+            self.y = e.y
         def do_move(e):
-            root = e.widget.winfo_toplevel()
-            x = root.winfo_x() + (e.x - root.x)
-            y = root.winfo_y() + (e.y - root.y)
-            root.geometry(f"+{x}+{y}")
+            deltax = e.x - self.x
+            deltay = e.y - self.y
+            x = self.winfo_x() + deltax
+            y = self.winfo_y() + deltay
+            self.geometry(f"+{x}+{y}")
         widget.bind("<Button-1>", start_move)
         widget.bind("<B1-Motion>", do_move)
 
     # ==========================================
-    #            SILENT AUTO UPDATER
+    #           FOCUS & VISIBILITY LOGIC
     # ==========================================
-    def _check_for_updates(self):
-        if "SEU_USUARIO" in GITHUB_REPO: return
-        threading.Thread(target=self._fetch_github_version, daemon=True).start()
-
-    def _fetch_github_version(self):
+    def _monitor_focus_loop(self):
+        if not self.running: return
         try:
-            url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-            req = urllib.request.Request(url, headers={'User-Agent': 'PoE-Tracker-App'})
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
-                latest_tag = data.get("tag_name", "").strip().replace("v", "")
-                
-                if latest_tag != APP_VERSION:
-                    exe_url = next((a["browser_download_url"] for a in data.get("assets", []) if a["name"].endswith(".exe")), None)
-                    if exe_url: 
-                        # Start silent update immediately without prompt
-                        self.root.after(0, lambda: self._start_silent_update(latest_tag, exe_url))
-        except: pass
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd: 
+                self.after(200, self._monitor_focus_loop)
+                return
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            active_title = buf.value
+            is_poe = "Path of Exile" in active_title
+            is_tracker = f"PoE Map Tracker v{APP_VERSION}" in active_title
+            
+            if is_poe or is_tracker:
+                if self.is_paused:
+                    resume_duration = time.time() - self.pause_timestamp
+                    if self.status == "running": self.start_time += resume_duration
+                    elif self.status == "cooldown": self.cooldown_start += resume_duration
+                    self.is_paused = False
+                if self.state() == "withdrawn": self.deiconify()
+                self.attributes("-topmost", True)
+            else:
+                if not self.is_paused and (self.status == "running" or self.status == "cooldown"):
+                    self.is_paused = True
+                    self.pause_timestamp = time.time()
+                if self.state() != "withdrawn": self.withdraw()
+        except Exception: pass
+        self.after(200, self._monitor_focus_loop)
 
-    def _start_silent_update(self, version, url):
-        # Notify user via UI Label instead of blocking Popup
-        self.lbl_map.config(text=f"Update v{version} found...", fg=THEME["accent"])
-        # Wait 2s then start download
-        self.root.after(2000, lambda: threading.Thread(target=self._perform_update, args=(url,), daemon=True).start())
-
-    def _perform_update(self, url):
+    def _monitor_game_process(self):
+        if not self.running: return
+        is_game_running = False
         try:
-            self.root.after(0, lambda: self.lbl_map.config(text="Downloading Update...", fg=THEME["accent"]))
-            
-            new_file_path = os.path.join(self.app_dir, "new_PoE-MapTracker.exe")
-            req = urllib.request.Request(url, headers={'User-Agent': 'PoE-MapTracker-Updater'})
-            
-            with urllib.request.urlopen(req) as response, open(new_file_path, 'wb') as out_file:
-                shutil.copyfileobj(response, out_file)
-            
-            if os.path.getsize(new_file_path) < 1024 * 500:
-                 raise Exception("Download corrupted")
+            output = subprocess.check_output('tasklist /FI "IMAGENAME eq PathOfExile*"', shell=True, creationflags=subprocess.CREATE_NO_WINDOW).decode('utf-8', errors='ignore')
+            for proc in GAME_PROCESSES:
+                if proc.lower() in output.lower():
+                    is_game_running = True
+                    break
+        except: is_game_running = True
 
-            self.root.after(0, lambda: self.lbl_map.config(text="Restarting...", fg=THEME["accent"]))
-            
-            current_exe = sys.executable
-            batch_script = os.path.join(self.app_dir, "update.bat")
-            
-            with open(batch_script, "w") as bat:
-                bat.write(f'@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nmove "{new_file_path}" "{current_exe}"\nstart "" "{current_exe}"\ndel "%~f0"\n')
-            
-            subprocess.Popen([batch_script], shell=True)
-            self.root.quit()
-            
-        except Exception as e:
-            # Fail silently on UI but log to map text
-            self.root.after(0, lambda: self.lbl_map.config(text="Update Failed", fg=THEME["death"]))
+        if not is_game_running:
+            self.game_not_found_count += 1
+            countdown = 10 - (self.game_not_found_count * 2)
+            if countdown <= 0:
+                if hasattr(self, 'tray_icon'): self.tray_icon.stop()
+                self.quit()
+                return
+            if not self.is_compact: self.lbl_map.configure(text=f"Game Closed! Closing {countdown}s...", text_color=THEME["death"])
+        else: self.game_not_found_count = 0 
+        self.after(2000, self._monitor_game_process)
 
     # ==========================================
-    #             LOG MONITORING
+    #           LOG & TRACKING LOGIC
     # ==========================================
     def _init_log_search(self):
         self.log_path = self._get_log_path()
         if self.log_path and os.path.exists(self.log_path):
-            self.current_map = "No Hideout"
+            self.current_map = "Hideout"
             threading.Thread(target=self._logic_loop, daemon=True).start()
             threading.Thread(target=self._monitor_log_file, daemon=True).start()
             self._update_gui_loop()
-        else:
-            self.lbl_map.config(text="Log not found!", fg=THEME["death"])
+        else: self.lbl_map.configure(text="Log not found!", text_color=THEME["death"])
 
     def _get_log_path(self):
         if os.path.exists(self.config_file):
             try:
-                with open(self.config_file, "r") as f:
-                    saved = f.read().strip()
-                if os.path.exists(saved): return saved
+                with open(self.config_file, "r") as f: return f.read().strip()
             except: pass
         candidates = [
             r"C:\Games\Steam\steamapps\common\Path of Exile\logs\Client.txt",
@@ -310,13 +459,14 @@ class PoEOverlay:
             if os.path.exists(path):
                 self._save_config(path)
                 return path
+        root = tk.Tk(); root.withdraw()
         messagebox.showinfo("Setup", "Please select 'Client.txt' in your Path of Exile logs folder.")
-        selected = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
+        selected = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")]); root.destroy()
         if selected: self._save_config(selected)
         return selected
 
     def _save_config(self, path):
-        try:
+        try: 
             with open(self.config_file, "w") as f: f.write(path)
         except: pass
 
@@ -330,8 +480,7 @@ class PoEOverlay:
                     time.sleep(0.1)
                     continue
                 self._process_log_line(line)
-        except Exception as e:
-            self.current_map = "Log Error"
+        except Exception: self.current_map = "Log Error"
 
     def _process_log_line(self, line):
         if " : You have entered " in line:
@@ -339,14 +488,11 @@ class PoEOverlay:
                 zone = line.split(" : You have entered ")[1].strip().replace(".", "")
                 self._handle_zone_change(zone)
             except: pass
-        if " : You have been slain." in line and self.status == "running":
-            self.deaths += 1
+        if " : You have been slain." in line and self.status == "running": self.deaths += 1
         if self.status == "running":
-            if any(char in line for char in ["@", "#", "$", "%", "&"]):
-                return
+            if any(char in line for char in ["@", "#", "$", "%", "&"]): return
             for trigger, data in MECHANICS_CONFIG.items():
-                if trigger in line:
-                    self._add_mechanic(data)
+                if trigger in line: self._add_mechanic(data)
 
     def _handle_zone_change(self, zone):
         is_safe = any(s in zone for s in SAFE_ZONES)
@@ -362,8 +508,7 @@ class PoEOverlay:
             elif self.status == "cooldown":
                 self.status = "running"
                 self.current_map = zone
-            else:
-                self._start_run(zone)
+            else: self._start_run(zone)
 
     def _start_run(self, zone):
         self.status = "running"
@@ -372,25 +517,23 @@ class PoEOverlay:
         self.elapsed = 0
         self.deaths = 0 
         self.mechanics_found = []
-        self.root.after(0, self._clear_mechanics_ui)
+        self.after(0, self._clear_mechanics_ui)
 
     def _clear_mechanics_ui(self):
-        for widget in self.frm_mechanics.winfo_children():
-            widget.destroy()
+        for widget in self.frm_mechanics.winfo_children(): widget.destroy()
 
     def _add_mechanic(self, mech_data):
         name = mech_data["name"]
         if name not in self.mechanics_found:
             self.mechanics_found.append(name)
-            self.root.after(0, lambda: self._draw_mechanic_badge(mech_data))
+            self.after(0, lambda: self._draw_mechanic_badge(mech_data))
 
     def _draw_mechanic_badge(self, data):
-        canvas = tk.Canvas(self.frm_mechanics, width=18, height=18, bg=data["color"], highlightthickness=0)
-        canvas.pack(side="left", padx=1)
-        canvas.create_text(9, 9, text=data["badge"], fill="#000000", font=FONTS["badge"])
+        badge = ctk.CTkLabel(self.frm_mechanics, text=data["badge"], fg_color=data["color"], text_color="black", font=FONTS["badge"], width=20, height=18, corner_radius=5)
+        badge.pack(side="left", padx=1)
 
     # ==========================================
-    #               DATA SAVING (QUEUED)
+    #            EXCEL / DATA SAVING
     # ==========================================
     def _prepare_run_data(self):
         if self.elapsed < 10: return
@@ -404,45 +547,38 @@ class PoEOverlay:
             "mechanics": ", ".join(self.mechanics_found)
         }
         self.pending_runs.append(run_data)
-        self.root.after(0, self._process_save_queue)
+        self.after(0, self._process_save_queue)
 
     def _process_save_queue(self):
         if not self.pending_runs: return
         try:
-            if not os.path.exists(self.excel_file):
-                self._create_excel_file()
+            self._ensure_history_folder()
+            if not os.path.exists(self.excel_file): self._create_excel_file()
             wb = load_workbook(self.excel_file)
-            for data in self.pending_runs:
-                self._append_history(wb, data)
+            for data in self.pending_runs: self._append_history(wb, data)
             self._update_statistics(wb)
             wb.save(self.excel_file)
             self.pending_runs.clear()
-            self.lbl_map.config(text="Saved!", fg=THEME["text"])
-        except PermissionError:
-            self.lbl_map.config(text="Excel Open! Retrying...", fg=THEME["death"])
-            self.root.after(5000, self._process_save_queue)
-        except Exception as e:
-            print(f"Save Error: {e}")
-            self.root.after(5000, self._process_save_queue)
+            self.lbl_map.configure(text="Saved!", text_color=THEME["text"])
+        except Exception:
+            self.lbl_map.configure(text="Excel Open! Retrying...", text_color=THEME["death"])
+            self.after(5000, self._process_save_queue)
 
     def _create_excel_file(self):
         wb = Workbook()
         ws = wb.active
         ws.title = "History"
-        headers = ["Date", "Time", "Map", "Tier", "Duration", "Deaths", "Mechanics"]
-        ws.append(headers)
+        ws.append(["Date", "Time", "Map", "Tier", "Duration", "Deaths", "Mechanics"])
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="2F3136", end_color="2F3136", fill_type="solid")
         wb.create_sheet("Statistics")
         ws_stats = wb["Statistics"]
-        headers_stats = ["Map Name", "Count", "Last Tier", "Total Deaths", "", "Mechanic", "Count"]
-        ws_stats.append(headers_stats)
+        ws_stats.append(["Map Name", "Count", "Last Tier", "Total Deaths", "Total Time", "", "Mechanic", "Count", "Total Time"])
         for cell in ws_stats[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="D4AF37", end_color="D4AF37", fill_type="solid")
-            if cell.col_idx in [6, 7]: 
-                cell.fill = PatternFill(start_color="5865F2", end_color="5865F2", fill_type="solid")
+            if cell.col_idx in [7, 8, 9]: cell.fill = PatternFill(start_color="5865F2", end_color="5865F2", fill_type="solid")
         wb.save(self.excel_file)
 
     def _append_history(self, wb, data):
@@ -455,72 +591,104 @@ class PoEOverlay:
         ws_stats.delete_rows(2, ws_stats.max_row + 1)
         maps_data = {}
         mechanics_data = {}
+        
         for row in ws_hist.iter_rows(min_row=2, values_only=True):
-            if not row or len(row) < 4: continue
+            if not row or len(row) < 5: continue
+            
             m_name, m_tier = row[2], row[3]
+            m_duration_str = row[4]
             m_deaths = row[5] if isinstance(row[5], int) else 0
+            
+            seconds = 0
+            try:
+                parts = str(m_duration_str).split(':')
+                if len(parts) == 2: seconds = int(parts[0]) * 60 + int(parts[1])
+                elif len(parts) == 3: seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            except: pass
+
             if m_name:
-                if m_name not in maps_data:
-                    maps_data[m_name] = {"count": 0, "tier": m_tier, "deaths": 0}
+                if m_name not in maps_data: maps_data[m_name] = {"count": 0, "tier": m_tier, "deaths": 0, "time": 0}
                 maps_data[m_name]["count"] += 1
                 maps_data[m_name]["deaths"] += m_deaths
                 maps_data[m_name]["tier"] = m_tier
-            m_mechs = row[6]
+                maps_data[m_name]["time"] += seconds
+
+            m_mechs = row[6] if len(row) > 6 else ""
             if m_mechs:
-                for mech in m_mechs.split(", "):
-                    if mech: mechanics_data[mech] = mechanics_data.get(mech, 0) + 1
+                for mech in str(m_mechs).split(", "):
+                    mech = mech.strip()
+                    if mech: 
+                        if mech not in mechanics_data: mechanics_data[mech] = {"count": 0, "time": 0}
+                        mechanics_data[mech]["count"] += 1
+                        mechanics_data[mech]["time"] += seconds
+
+        def fmt_dur(s):
+            d = s // 86400; s %= 86400
+            h = s // 3600; s %= 3600
+            m = s // 60; s %= 60
+            parts = []
+            if d > 0: parts.append(f"{d}d")
+            if h > 0: parts.append(f"{h}h")
+            if m > 0: parts.append(f"{m}m")
+            parts.append(f"{s}s")
+            return " ".join(parts) if parts else "0s"
+
         sorted_maps = sorted(maps_data.items(), key=lambda x: x[1]['count'], reverse=True)
         for idx, (name, data) in enumerate(sorted_maps):
             ws_stats.cell(row=idx+2, column=1, value=name)
             ws_stats.cell(row=idx+2, column=2, value=data['count'])
             ws_stats.cell(row=idx+2, column=3, value=data['tier'])
             ws_stats.cell(row=idx+2, column=4, value=data['deaths'])
-        sorted_mechs = sorted(mechanics_data.items(), key=lambda x: x[1], reverse=True)
-        for idx, (name, count) in enumerate(sorted_mechs):
-            ws_stats.cell(row=idx+2, column=6, value=name)
-            ws_stats.cell(row=idx+2, column=7, value=count)
+            ws_stats.cell(row=idx+2, column=5, value=fmt_dur(data['time']))
+
+        sorted_mechs = sorted(mechanics_data.items(), key=lambda x: x[1]['count'], reverse=True)
+        for idx, (name, data) in enumerate(sorted_mechs):
+            ws_stats.cell(row=idx+2, column=7, value=name)
+            ws_stats.cell(row=idx+2, column=8, value=data['count'])
+            ws_stats.cell(row=idx+2, column=9, value=fmt_dur(data['time']))
+        
         ws_stats.column_dimensions['A'].width = 25
-        ws_stats.column_dimensions['F'].width = 15
+        ws_stats.column_dimensions['E'].width = 15
+        ws_stats.column_dimensions['G'].width = 15
+        ws_stats.column_dimensions['I'].width = 15
 
     def _logic_loop(self):
         while self.running:
             time.sleep(0.1)
-            if self.status == "running":
-                self.elapsed = time.time() - self.start_time
+            if self.is_paused: continue
+            if self.status == "running": self.elapsed = time.time() - self.start_time
             elif self.status == "cooldown":
                 remain = SAVE_DELAY - (time.time() - self.cooldown_start)
                 if remain <= 0:
                     self._prepare_run_data()
                     self.status = "idle"
                     self.elapsed = 0
-                    self.current_map = "No Hideout"
+                    self.current_map = "Hideout"
                     self.deaths = 0
                     self.mechanics_found = []
                     
     def _update_gui_loop(self):
-        if self.status == "cooldown":
-            remain = int(SAVE_DELAY - (time.time() - self.cooldown_start))
-            if self.is_compact: self.lbl_map.config(text="") 
-            else: self.lbl_map.config(text=f"Saving: {remain}s", fg="orange")
-        else:
-            if self.pending_runs:
-                if not self.is_compact: self.lbl_map.config(text="Excel Open! Retrying...", fg=THEME["death"])
+        if self.game_not_found_count == 0:
+            if self.status == "cooldown":
+                remain = int(SAVE_DELAY - (time.time() - self.cooldown_start))
+                if self.is_compact: self.lbl_map.configure(text="") 
+                else: self.lbl_map.configure(text=f"Saving: {remain}s", text_color="orange")
             else:
-                if not self.is_compact:
-                    name = self.current_map
-                    if len(name) > 22: name = name[:20] + ".."
-                    self.lbl_map.config(text=name, fg=THEME["text"])
-        self.lbl_timer.config(text=self._format_time(self.elapsed))
-        self.lbl_deaths.config(text=f"☠ {self.deaths}" if self.deaths > 0 else "")
-        self.lbl_timer.config(fg=THEME["accent"] if self.status == "running" else THEME["timer_idle"])
+                if self.pending_runs:
+                    if not self.is_compact: self.lbl_map.configure(text="Excel Open! Retrying...", text_color=THEME["death"])
+                else:
+                    if not self.is_compact:
+                        name = self.current_map
+                        if len(name) > 22: name = name[:20] + ".."
+                        self.lbl_map.configure(text=name, text_color=THEME["text"])
+        self.lbl_timer.configure(text=self._format_time(self.elapsed), text_color=THEME["accent"] if self.status == "running" else THEME["timer_idle"])
+        self.lbl_deaths.configure(text=f"☠ {self.deaths}" if self.deaths > 0 else "")
         if self.status == "idle" and self.frm_mechanics.winfo_children():
             for widget in self.frm_mechanics.winfo_children(): widget.destroy()
-        self.root.after(100, self._update_gui_loop)
+        self.after(100, self._update_gui_loop)
 
-    def _format_time(self, s):
-        return f"{int(s//60):02d}:{int(s%60):02d}"
+    def _format_time(self, s): return f"{int(s//60):02d}:{int(s%60):02d}"
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    PoEOverlay(root)
-    root.mainloop()
+    app = PoEOverlay()
+    app.mainloop()
