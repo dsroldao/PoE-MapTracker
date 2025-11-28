@@ -32,11 +32,9 @@ except ImportError:
 
 # --- App Info ---
 APP_VERSION = "1.0.7"
-# FIX: App ID for Taskbar Icon Grouping
-APP_ID = 'dsroldao.poemaptracker.v1.0.7' 
 
 # --- Logic Settings ---
-SAVE_DELAY = 15  
+SAVE_DELAY = 15  # Seconds to wait after leaving a map before saving the run
 GAME_PROCESSES = ["PathOfExile.exe", "PathOfExile_x64.exe", "PathOfExileSteam.exe"]
 
 # --- Visual Settings (Modern Theme) ---
@@ -61,6 +59,7 @@ FONTS = {
 }
 
 # --- Game Logic Settings ---
+# List of Safe Zones where the timer should pause automatically
 SAFE_ZONES = [
     "Lioneye's Watch", "The Forest Encampment", "The Sarn Encampment", 
     "Highgate", "Overseer's Tower", "The Bridge Encampment", 
@@ -70,37 +69,79 @@ SAFE_ZONES = [
     "Monastery of the Keepers"
 ]
 
+# List of Tier 17 Maps (To append T17 tag)
+TIER_17_MAPS = [
+    "Abomination", 
+    "Citadel", 
+    "Fortress", 
+    "Sanctuary", 
+    "Ziggurat"
+]
+
+# Mechanics Configuration
+# Maps chat triggers to mechanic names, colors, and badges
 MECHANICS_CONFIG = {
+    # Delirium
     "The Strange Voice": {"name": "Delirium",      "color": "#A9A9A9", "badge": "D"},
     "Strange Voice":     {"name": "Delirium",      "color": "#A9A9A9", "badge": "D"},
+    
+    # Ultimatum
     "The Trialmaster":   {"name": "Ultimatum",     "color": "#FF4444", "badge": "U"},
     "Trialmaster":       {"name": "Ultimatum",     "color": "#FF4444", "badge": "U"},
+    
+    # Blight
     "Sister Cassia":     {"name": "Blight",        "color": "#FFFACD", "badge": "B"},
+    
+    # Incursion
     "Alva":              {"name": "Incursion",     "color": "#FFA500", "badge": "A"},
+    
+    # Beasts
     "Einhar":            {"name": "Beasts",        "color": "#D2691E", "badge": "Ei"},
+    
+    # Delve
     "Niko":              {"name": "Delve",         "color": "#4488FF", "badge": "N"},
+    
+    # Betrayal
     "Jun":               {"name": "Betrayal",      "color": "#90EE90", "badge": "Sy"},
     "Interrogate":       {"name": "Betrayal",      "color": "#90EE90", "badge": "Sy"},
+    
+    # Maven
     "The Envoy":         {"name": "Maven",         "color": "#FF00FF", "badge": "M"},
     "The Maven":         {"name": "Maven",         "color": "#FF00FF", "badge": "M"},
+    
+    # Expedition
     "Dannig":            {"name": "Expedition",    "color": "#00FFFF", "badge": "E"},
     "Tujen":             {"name": "Expedition",    "color": "#00FFFF", "badge": "E"},
     "Rog":               {"name": "Expedition",     "color": "#00FFFF", "badge": "E"},
     "Gwennen":           {"name": "Expedition",    "color": "#00FFFF", "badge": "E"},
+    
+    # Sanctum
     "Divinia":           {"name": "Sanctum",       "color": "#FFD700", "badge": "S"},
+    
+    # Nameless Seer
     "Nameless Seer":     {"name": "Nameless Seer", "color": "#C8A2C8", "badge": "NS"},
+
+    # Eagon (Memory Tear mechanic)
     "Eagon Caeserius":   {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"}, 
     "Eagon":             {"name": "Eagon",         "color": "#9370DB", "badge": "Eg"},
+
+    # Harvest (Oshabi)
     "Oshabi":            {"name": "Harvest",       "color": "#7FFFD4", "badge": "H"},
-    "Oshabi, Avatar of the Grove": {"name": "Harvest", "color": "#7FFFD4", "badge": "H"} 
+    "Oshabi, Avatar of the Grove": {"name": "Harvest", "color": "#7FFFD4", "badge": "H"},
+
+    # Zana (Tier 16.5)
+    "Zana, The Originator": {"name": "Tier 16.5",   "color": "#DA70D6", "badge": "T16.5"}
 }
 
 class PoEOverlay(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # Apply App ID for Taskbar Icon
-        try: ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        # FIX: Set App ID immediately for Taskbar Icon
+        try:
+            # App ID for Windows Taskbar grouping
+            myappid = 'dsroldao.poemaptracker.v1.0.7'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except: pass
 
         self._check_single_instance()
@@ -110,7 +151,6 @@ class PoEOverlay(ctk.CTk):
         self._init_window() 
         self._setup_ui()
         
-        # Start Tray Icon
         if HAS_TRAY:
             threading.Thread(target=self._setup_tray_icon, daemon=True).start()
 
@@ -120,37 +160,22 @@ class PoEOverlay(ctk.CTk):
         
         self.after(200, self._force_taskbar_icon)
 
-    # --- HELPER: Ultimate Resource Path Finder ---
     def resource_path(self, relative_path):
-        """ 
-        Get absolute path to resource. 
-        Checks multiple locations to ensure it finds the file in Dev, PyInstaller, and Nuitka modes.
-        """
+        """ Get absolute path to resource, works for dev and for PyInstaller/Nuitka """
         search_paths = []
-        
-        # 1. Nuitka / Standard Script Directory (The most reliable for Nuitka onefile)
         try:
             search_paths.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path))
         except: pass
-
-        # 2. PyInstaller Temp Folder (_MEIPASS)
         if hasattr(sys, '_MEIPASS'):
             search_paths.append(os.path.join(sys._MEIPASS, relative_path))
-        
-        # 3. Executable Directory (Where the .exe sits)
         try:
             search_paths.append(os.path.join(os.path.dirname(sys.executable), relative_path))
         except: pass
-
-        # 4. Current Working Directory
         search_paths.append(os.path.join(os.getcwd(), relative_path))
 
-        # Check all potential paths
         for path in search_paths:
             if os.path.exists(path):
                 return path
-        
-        # If all fails, return relative and hope for the best
         return relative_path
 
     def _check_single_instance(self):
@@ -178,7 +203,6 @@ class PoEOverlay(ctk.CTk):
         self.attributes("-alpha", 0.95)
         self.configure(fg_color=THEME["bg"])
         
-        # --- ICON LOADING (UPDATED) ---
         icon_path = self.resource_path("icon.ico")
         if os.path.exists(icon_path):
             try:
@@ -213,9 +237,9 @@ class PoEOverlay(ctk.CTk):
         self.is_compact = False
         self.pending_runs = []
         self.game_not_found_count = 0 
-        
         self.is_paused = False
         self.pause_timestamp = 0
+        self.latest_safe_zone = "Hideout" # Stores the last visited safe zone
 
         if getattr(sys, 'frozen', False) or "__compiled__" in globals():
             self.app_dir = os.path.dirname(sys.executable)
@@ -235,7 +259,6 @@ class PoEOverlay(ctk.CTk):
 
     def _create_start_menu_shortcut(self):
         if not getattr(sys, 'frozen', False): return 
-
         try:
             app_name = "PoE Map Tracker"
             start_menu = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows", "Start Menu", "Programs")
@@ -257,30 +280,21 @@ class PoEOverlay(ctk.CTk):
                 subprocess.run(["powershell", "-Command", ps_script], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
         except: pass
 
-    # ==========================================
-    #               SYSTEM TRAY
-    # ==========================================
     def _setup_tray_icon(self):
         if not HAS_TRAY: return
-        
         icon_path = self.resource_path("icon.ico")
-        
         if os.path.exists(icon_path):
             image = Image.open(icon_path)
         else:
-            # Fallback if icon is REALLY missing
             image = Image.new('RGB', (64, 64), color=(212, 175, 55))
             d = ImageDraw.Draw(image)
             d.rectangle([16,16,48,48], fill=(47, 49, 54))
-
         def on_quit(icon, item):
             icon.stop()
             self.quit()
-
         def on_show(icon, item):
             self.after(0, self.deiconify)
             self.after(0, lambda: self.attributes("-topmost", True))
-
         menu = pystray.Menu(
             pystray.MenuItem("Show Tracker", on_show, default=True),
             pystray.MenuItem("Exit", on_quit)
@@ -288,9 +302,6 @@ class PoEOverlay(ctk.CTk):
         self.tray_icon = pystray.Icon("PoE Map Tracker", image, "PoE Map Tracker", menu)
         self.tray_icon.run()
 
-    # ==========================================
-    #                  UI SETUP
-    # ==========================================
     def _setup_ui(self):
         self.title_bar = ctk.CTkFrame(self.main_container, height=16, fg_color=THEME["title_bg"], corner_radius=0)
         self.title_bar.pack(fill="x", side="top")
@@ -376,9 +387,6 @@ class PoEOverlay(ctk.CTk):
         widget.bind("<Button-1>", start_move)
         widget.bind("<B1-Motion>", do_move)
 
-    # ==========================================
-    #           FOCUS & VISIBILITY LOGIC
-    # ==========================================
     def _monitor_focus_loop(self):
         if not self.running: return
         try:
@@ -431,13 +439,10 @@ class PoEOverlay(ctk.CTk):
         else: self.game_not_found_count = 0 
         self.after(2000, self._monitor_game_process)
 
-    # ==========================================
-    #           LOG & TRACKING LOGIC
-    # ==========================================
     def _init_log_search(self):
         self.log_path = self._get_log_path()
         if self.log_path and os.path.exists(self.log_path):
-            self.current_map = "Hideout"
+            self.current_map = "No Hideout"
             threading.Thread(target=self._logic_loop, daemon=True).start()
             threading.Thread(target=self._monitor_log_file, daemon=True).start()
             self._update_gui_loop()
@@ -492,14 +497,27 @@ class PoEOverlay(ctk.CTk):
         if self.status == "running":
             if any(char in line for char in ["@", "#", "$", "%", "&"]): return
             for trigger, data in MECHANICS_CONFIG.items():
-                if trigger in line: self._add_mechanic(data)
+                if trigger in line: 
+                    self._add_mechanic(data)
+                    # Special Check for Zana/T16.5
+                    if data["name"] == "Tier 16.5":
+                        if "(T16.5)" not in self.current_map:
+                            self.current_map += " (T16.5)"
 
     def _handle_zone_change(self, zone):
         is_safe = any(s in zone for s in SAFE_ZONES)
+        
+        # T17 CHECK (Append T17 tag automatically)
+        if zone in TIER_17_MAPS and "(T17)" not in zone:
+            zone += " (T17)"
+
         if is_safe:
+            self.latest_safe_zone = zone # Store safe zone name
             if self.status == "running": 
                 self.status = "cooldown"
                 self.cooldown_start = time.time()
+            elif self.status == "idle":
+                self.current_map = zone # Update display instantly if idle
         else:
             if self.status == "running": 
                 if self.current_map != zone:
@@ -532,9 +550,6 @@ class PoEOverlay(ctk.CTk):
         badge = ctk.CTkLabel(self.frm_mechanics, text=data["badge"], fg_color=data["color"], text_color="black", font=FONTS["badge"], width=20, height=18, corner_radius=5)
         badge.pack(side="left", padx=1)
 
-    # ==========================================
-    #            EXCEL / DATA SAVING
-    # ==========================================
     def _prepare_run_data(self):
         if self.elapsed < 10: return
         run_data = {
@@ -591,19 +606,17 @@ class PoEOverlay(ctk.CTk):
         ws_stats.delete_rows(2, ws_stats.max_row + 1)
         maps_data = {}
         mechanics_data = {}
-        
         for row in ws_hist.iter_rows(min_row=2, values_only=True):
             if not row or len(row) < 5: continue
-            
             m_name, m_tier = row[2], row[3]
-            m_duration_str = row[4]
+            m_dur_str = row[4]
             m_deaths = row[5] if isinstance(row[5], int) else 0
             
-            seconds = 0
+            secs = 0
             try:
-                parts = str(m_duration_str).split(':')
-                if len(parts) == 2: seconds = int(parts[0]) * 60 + int(parts[1])
-                elif len(parts) == 3: seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                parts = str(m_dur_str).split(':')
+                if len(parts) == 2: secs = int(parts[0]) * 60 + int(parts[1])
+                elif len(parts) == 3: secs = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
             except: pass
 
             if m_name:
@@ -611,8 +624,7 @@ class PoEOverlay(ctk.CTk):
                 maps_data[m_name]["count"] += 1
                 maps_data[m_name]["deaths"] += m_deaths
                 maps_data[m_name]["tier"] = m_tier
-                maps_data[m_name]["time"] += seconds
-
+                maps_data[m_name]["time"] += secs
             m_mechs = row[6] if len(row) > 6 else ""
             if m_mechs:
                 for mech in str(m_mechs).split(", "):
@@ -620,18 +632,18 @@ class PoEOverlay(ctk.CTk):
                     if mech: 
                         if mech not in mechanics_data: mechanics_data[mech] = {"count": 0, "time": 0}
                         mechanics_data[mech]["count"] += 1
-                        mechanics_data[mech]["time"] += seconds
-
+                        mechanics_data[mech]["time"] += secs
+        
         def fmt_dur(s):
             d = s // 86400; s %= 86400
             h = s // 3600; s %= 3600
             m = s // 60; s %= 60
-            parts = []
-            if d > 0: parts.append(f"{d}d")
-            if h > 0: parts.append(f"{h}h")
-            if m > 0: parts.append(f"{m}m")
-            parts.append(f"{s}s")
-            return " ".join(parts) if parts else "0s"
+            p = []
+            if d > 0: p.append(f"{d}d")
+            if h > 0: p.append(f"{h}h")
+            if m > 0: p.append(f"{m}m")
+            p.append(f"{s}s")
+            return " ".join(p) if p else "0s"
 
         sorted_maps = sorted(maps_data.items(), key=lambda x: x[1]['count'], reverse=True)
         for idx, (name, data) in enumerate(sorted_maps):
@@ -640,13 +652,11 @@ class PoEOverlay(ctk.CTk):
             ws_stats.cell(row=idx+2, column=3, value=data['tier'])
             ws_stats.cell(row=idx+2, column=4, value=data['deaths'])
             ws_stats.cell(row=idx+2, column=5, value=fmt_dur(data['time']))
-
         sorted_mechs = sorted(mechanics_data.items(), key=lambda x: x[1]['count'], reverse=True)
         for idx, (name, data) in enumerate(sorted_mechs):
             ws_stats.cell(row=idx+2, column=7, value=name)
             ws_stats.cell(row=idx+2, column=8, value=data['count'])
             ws_stats.cell(row=idx+2, column=9, value=fmt_dur(data['time']))
-        
         ws_stats.column_dimensions['A'].width = 25
         ws_stats.column_dimensions['E'].width = 15
         ws_stats.column_dimensions['G'].width = 15
@@ -663,7 +673,7 @@ class PoEOverlay(ctk.CTk):
                     self._prepare_run_data()
                     self.status = "idle"
                     self.elapsed = 0
-                    self.current_map = "Hideout"
+                    self.current_map = self.latest_safe_zone # Update display to current safe zone
                     self.deaths = 0
                     self.mechanics_found = []
                     
